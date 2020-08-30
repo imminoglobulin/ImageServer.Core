@@ -166,8 +166,8 @@ namespace ImageServer.Core.Controllers
                 {
                     FileContentResult file = File(bytes, mimeType);
 
-                    using var sha = SHA1.Create();
-                    var hash = sha.ComputeHash(bytes);
+                    using var hashProvider = new SHA256Managed();
+                    var hash = hashProvider.ComputeHash(bytes);
                     var checksum = $"\"{WebEncoders.Base64UrlEncode(hash)}\"";
                     file.EntityTag = new EntityTagHeaderValue(checksum);
 
