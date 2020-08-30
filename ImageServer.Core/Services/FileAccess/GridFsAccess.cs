@@ -10,7 +10,6 @@ namespace ImageServer.Core.Services.FileAccess
 {
     public class GridFsAccess : IFileAccessStrategy
     {
-
         public async Task<byte[]> GetFileAsync(HostConfig host, string file)
         {
             int index = file.LastIndexOf('.');
@@ -22,7 +21,9 @@ namespace ImageServer.Core.Services.FileAccess
             {
                 var ob = new ObjectId(file);
                 if (ob == ObjectId.Empty)
+                {
                     return null;
+                }
 
                 bytes = await bucket.DownloadAsBytesAsync(ob);
             }
@@ -47,11 +48,18 @@ namespace ImageServer.Core.Services.FileAccess
             return bytes;
         }
 
+        public async Task<ObjectId> PostFileAsync(HostConfig host, byte[] data)
+        {
+            GridFSBucket gridFsBucket = GetBucket(host);
+
+            return await gridFsBucket.UploadFromBytesAsync("filename", data);
+        }
+
         private GridFSBucket GetBucket(HostConfig host)
         {
             var client = new MongoClient(host.ConnectionString);
 
-            var database = client.GetDatabase(host.DatabaseName);
+            IMongoDatabase database = client.GetDatabase(host.DatabaseName);
 
             var bucket = new GridFSBucket(database);
             return bucket;

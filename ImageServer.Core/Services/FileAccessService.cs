@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using ImageServer.Core.Model;
 using ImageServer.Core.Services.FileAccess;
 using Microsoft.Extensions.Options;
+using MongoDB.Bson;
 
 namespace ImageServer.Core.Services
 {
@@ -20,7 +21,7 @@ namespace ImageServer.Core.Services
 
         public HostConfig GetHostConfig(string slug)
         {
-            var host = _hosts.Find(x => x.Slug == slug);
+            HostConfig host = _hosts.Find(x => x.Slug == slug);
 
             if (host == null)
             {
@@ -32,19 +33,31 @@ namespace ImageServer.Core.Services
 
         public async Task<byte[]> GetFileAsync(string slug, string file)
         {
-            var host = _hosts.Find(x => x.Slug == slug);
+            HostConfig host = _hosts.Find(x => x.Slug == slug);
             if (host == null)
             {
                 throw new SlugNotFoundException($"{slug}");
             }
 
-            var access = _strategies[host.Type];
+            IFileAccessStrategy access = _strategies[host.Type];
 
             var fileBytes = await access.GetFileAsync(host, file);
 
             return fileBytes;
         }
 
+        public Task<ObjectId> PostFileAsync(string slug, byte[] data)
+        {
+            HostConfig host = _hosts.Find(x => x.Slug == slug);
 
+            if (host == null)
+            {
+                throw new SlugNotFoundException($"{slug}");
+            }
+
+            IFileAccessStrategy access = _strategies[host.Type];
+
+            return access.PostFileAsync(host, data);
+        }
     }
 }

@@ -1,24 +1,31 @@
 ﻿using System;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Net;
+using System.Security.Cryptography;
 using System.Threading.Tasks;
+using ImageServer.Core.Model;
 using ImageServer.Core.Services;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Net.Http.Headers;
+using MongoDB.Bson;
 
 namespace ImageServer.Core.Controllers
 {
     public class ImageController : Controller
     {
+        private readonly IConfiguration _configuration;
         private readonly IFileAccessService _fileService;
         private readonly IImageService _imageService;
         private readonly ILogger<ImageController> _logger;
-        private readonly IConfiguration _configuration;
 
-        public ImageController(IFileAccessService fileService, IImageService imageService, ILogger<ImageController> logger, IConfiguration configuration)
+        public ImageController(IFileAccessService fileService, IImageService imageService, ILogger<ImageController> logger,
+            IConfiguration configuration)
         {
             _fileService = fileService ?? throw new ArgumentNullException(nameof(fileService));
             _imageService = imageService ?? throw new ArgumentNullException(nameof(imageService));
@@ -32,35 +39,61 @@ namespace ImageServer.Core.Controllers
         [HttpGet("/i/{slug}/{quality:range(0,100)}/{w:range(0,5000)}x{h:range(0,5000)}/{*id}")]
         public async Task<IActionResult> ImageAsync(string id, string slug, int w, int h, int quality, string options = "")
         {
-            if (!int.TryParse(_configuration.GetValue<string>("CacheControlMaxAgeDay"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int maxAgeDay))
+            if (!int.TryParse(_configuration.GetValue<string>("CacheControlMaxAgeDay"), NumberStyles.Integer, CultureInfo.InvariantCulture,
+                out int maxAgeDay))
             {
                 maxAgeDay = 1;
             }
+
             Response.Headers.Add("Cache-Control", $"public, max-age={TimeSpan.FromDays(maxAgeDay).TotalSeconds}");
             Response.Headers.Add("Access-Control-Allow-Origin", "*");
 
             if (string.IsNullOrWhiteSpace(id))
             {
                 _logger.LogError("Id is null");
-                return new StatusCodeResult((int)HttpStatusCode.BadRequest);
+                return new StatusCodeResult((int) HttpStatusCode.BadRequest);
             }
 
             if (0 > w || 0 > h)
             {
                 _logger.LogError("Width or height is negative");
-                return new StatusCodeResult((int)HttpStatusCode.BadRequest);
+                return new StatusCodeResult((int) HttpStatusCode.BadRequest);
             }
 
             return await ImageResult(id, slug, w, h, quality, options);
         }
 
+
+        [HttpPost("/i/{slug}")]
+        public async Task<IActionResult> ImageUploadAsync(string slug)
+        {
+            try
+            {
+                IFormFile file = Request.Form.Files[0];
+
+                await using var stream = new MemoryStream();
+                await file.CopyToAsync(stream);
+                var array = stream.ToArray();
+
+                ObjectId fileId = await _fileService.PostFileAsync(slug, array);
+
+                return Ok(fileId.ToJson());
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex}");
+            }
+        }
+
         [HttpGet("/i/{slug}/{*filepath}")]
         public async Task<IActionResult> ImageFromFilePathAsync(string filepath, string slug)
         {
-            if (!int.TryParse(_configuration.GetValue<string>("CacheControlMaxAgeDay"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int maxAgeDay))
+            if (!int.TryParse(_configuration.GetValue<string>("CacheControlMaxAgeDay"), NumberStyles.Integer, CultureInfo.InvariantCulture,
+                out int maxAgeDay))
             {
                 maxAgeDay = 1;
             }
+
             Response.Headers.Add("Cache-Control", $"public, max-age={TimeSpan.FromDays(maxAgeDay).TotalSeconds}");
             Response.Headers.Add("Access-Control-Allow-Origin", "*");
             return await ImageResult(filepath, slug);
@@ -71,12 +104,12 @@ namespace ImageServer.Core.Controllers
             byte[] bytes;
             try
             {
-                var host = _fileService.GetHostConfig(slug);
+                HostConfig host = _fileService.GetHostConfig(slug);
 
                 if (host.WhiteList != null && host.WhiteList.Any() && host.WhiteList.All(x => x != $"{w}x{h}")) //whitelist checking
                 {
                     _logger.LogError("Image request cancelled due to whitelist.");
-                    return new StatusCodeResult((int)HttpStatusCode.BadRequest);
+                    return new StatusCodeResult((int) HttpStatusCode.BadRequest);
                 }
 
                 bytes = await _fileService.GetFileAsync(slug, id);
@@ -97,27 +130,27 @@ namespace ImageServer.Core.Controllers
             catch (SlugNotFoundException e)
             {
                 _logger.LogError(e, "Unknown host requested: " + e.Message);
-                return new StatusCodeResult((int)HttpStatusCode.BadRequest);
+                return new StatusCodeResult((int) HttpStatusCode.BadRequest);
             }
             catch (GridFsObjectIdException e)
             {
                 _logger.LogError(e, "GridFS ObjectId Parse Error:" + e.Message);
-                return new StatusCodeResult((int)HttpStatusCode.BadRequest);
+                return new StatusCodeResult((int) HttpStatusCode.BadRequest);
             }
             catch (TimeoutException e)
             {
                 _logger.LogError(e, "Timeout: " + e.Message);
-                return new StatusCodeResult((int)HttpStatusCode.GatewayTimeout);
+                return new StatusCodeResult((int) HttpStatusCode.GatewayTimeout);
             }
             catch (UnauthorizedAccessException e)
             {
                 _logger.LogError(e, "Access denied: " + e.Message);
-                return new StatusCodeResult((int)HttpStatusCode.Unauthorized);
+                return new StatusCodeResult((int) HttpStatusCode.Unauthorized);
             }
-            catch (System.IO.FileNotFoundException e)
+            catch (FileNotFoundException e)
             {
                 _logger.LogError(e, "Filen not found: " + e.Message);
-                return new StatusCodeResult((int)HttpStatusCode.NotFound);
+                return new StatusCodeResult((int) HttpStatusCode.NotFound);
             }
             catch (Exception e)
             {
@@ -127,25 +160,23 @@ namespace ImageServer.Core.Controllers
 
             try
             {
-                bytes = _imageService.GetImageAsBytes(w, h, quality, bytes, options, out var mimeType);
+                bytes = _imageService.GetImageAsBytes(w, h, quality, bytes, options, out string mimeType);
 
                 if (bytes != null)
                 {
-                    var file = File(bytes, mimeType);
+                    FileContentResult file = File(bytes, mimeType);
 
-                    using (var sha = System.Security.Cryptography.SHA1.Create())
-                    {
-                        var hash = sha.ComputeHash(bytes);
-                        var checksum = $"\"{WebEncoders.Base64UrlEncode(hash)}\"";
-                        file.EntityTag = new Microsoft.Net.Http.Headers.EntityTagHeaderValue(checksum);
-                    }
+                    using var sha = SHA1.Create();
+                    var hash = sha.ComputeHash(bytes);
+                    var checksum = $"\"{WebEncoders.Base64UrlEncode(hash)}\"";
+                    file.EntityTag = new EntityTagHeaderValue(checksum);
 
                     return file;
                 }
 
 
                 _logger.LogError("File found but image operation failed by unknown cause");
-                return StatusCode((int)HttpStatusCode.NotAcceptable);
+                return StatusCode((int) HttpStatusCode.NotAcceptable);
             }
             catch (Exception e)
             {
@@ -153,6 +184,5 @@ namespace ImageServer.Core.Controllers
                 throw;
             }
         }
-
     }
 }

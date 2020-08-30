@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
 using ImageServer.Core.Model;
+using MongoDB.Bson;
 
 namespace ImageServer.Core.Services.FileAccess
 {
@@ -13,11 +14,11 @@ namespace ImageServer.Core.Services.FileAccess
         {
             var url = $"{host.Backend}/{file}";
 
-            using var stream = new MemoryStream();
+            await using var stream = new MemoryStream();
             using var client = new HttpClient();
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            using var response = await client.SendAsync(request);
-                
+            using HttpResponseMessage response = await client.SendAsync(request);
+
             if (response.StatusCode == HttpStatusCode.NotFound)
             {
                 throw new FileNotFoundException("File not found", url);
@@ -28,11 +29,13 @@ namespace ImageServer.Core.Services.FileAccess
                 throw new HttpRequestException($"Http request not OK: {response.StatusCode}, url: {url}");
             }
 
-            using var contentStream = await response.Content.ReadAsStreamAsync();
+            await using Stream contentStream = await response.Content.ReadAsStreamAsync();
 
             await contentStream.CopyToAsync(stream);
 
-            return stream.TryGetBuffer(out ArraySegment<byte> data) ? data.Array : null;
+            return stream.TryGetBuffer(out var data) ? data.Array : null;
         }
+
+        public Task<ObjectId> PostFileAsync(HostConfig hostConfig, byte[] bytes) => throw new NotImplementedException();
     }
 }

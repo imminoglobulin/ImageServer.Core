@@ -1,5 +1,6 @@
 ﻿using System.Threading.Tasks;
 using ImageServer.Core.Model;
+using MongoDB.Bson;
 
 namespace ImageServer.Core.Services
 {
@@ -8,5 +9,7 @@ namespace ImageServer.Core.Services
         HostConfig GetHostConfig(string slug);
 
         Task<byte[]> GetFileAsync(string slug, string file);
+
+        Task<ObjectId> PostFileAsync(string slug, byte[] array);
     }
 }
